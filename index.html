@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>전국 화재사고 지도</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,'Malgun Gothic',sans-serif;color:#14233a}
+    *{box-sizing:border-box}body{margin:0;background:#f4f7fb}
+    header{background:#193653;color:#fff;padding:14px 18px;font-size:18px;font-weight:700}
+    .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:end;padding:14px 18px;background:white;border-bottom:1px solid #dce4ed}
+    label{font-size:12px;font-weight:700;display:flex;flex-direction:column;gap:5px}
+    input,select,button{font:inherit;border:1px solid #c8d2df;border-radius:8px;padding:10px;background:white;min-height:42px}
+    button{background:#1d4972;color:white;border-color:#1d4972;cursor:pointer}
+    #status{padding:9px 18px;font-size:13px;min-height:40px;background:#edf3fa}
+    #map{width:100%;height:calc(100dvh - 197px);min-height:340px;background:#e5eaf0}
+    .help{padding:12px 18px;font-size:13px;line-height:1.6;background:white}
+    .help button{font-size:12px;min-height:34px;padding:5px 9px}
+    #keyBox{display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 18px;background:#fffbe9;border-bottom:1px solid #eadca9}
+    #keyBox.visible{display:flex}#keyBox input{min-width:240px;flex:1}
+    .popup{font-size:13px;line-height:1.6;max-width:260px;overflow-wrap:anywhere}
+    .popup strong{display:block;font-size:14px}.popup a{display:inline-block;margin-top:5px}
+    @media(max-width:580px){.controls{padding:10px;gap:8px}.controls label{flex:1;min-width:135px}.controls input,.controls select{width:100%}#map{height:calc(100dvh - 234px)}header{font-size:16px}}
+  </style>
+</head>
+<body>
+<header>🔥 전국 화재사고 지도</header>
+<section class="controls">
+  <label>화재 발생일 <input type="date" id="day"></label>
+  <label>지역 그룹 <select id="group"><option value="all">전국전체</option><option value="capital">수도권 (서울·경기·인천)</option><option value="mid">충청강원권 (강원·충남·충북)</option><option value="other">기타지역</option></select></label>
+  <button id="refresh">조회</button>
+</section>
+<div id="keyBox"><label style="flex:1">카카오 JavaScript 키 (개인 브라우저에만 보관)<input id="kakaoKey" placeholder="JavaScript 키를 붙여넣으세요" autocomplete="off" spellcheck="false"></label><button id="saveKey">지도 열기</button></div>
+<div id="status" role="status">지도 준비 중…</div>
+<div id="map" aria-label="화재 위치 지도"></div>
+<div class="help">선택한 날짜의 화재 위치만 표시합니다. 마커를 누르면 상세주소와 카카오맵 링크를 볼 수 있습니다. <button id="changeKey" type="button">지도 키 변경</button><div>화재정보는 공개 지도 데이터 파일(<code>data/YYYY-MM-DD.json</code>)을 연결한 후 표시됩니다. 공개 웹사이트이므로 업로드한 사고정보는 외부에서도 볼 수 있습니다.</div></div>
+<script>
+(()=>{
+ 'use strict';
+ const el=(id)=>document.getElementById(id), status=(msg)=>el('status').textContent=msg;
+ const fmtDate=(d)=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+ el('day').value=fmtDate(new Date());
+ const groupMap={capital:['서울','경기','인천'],mid:['강원','충남','충북']};
+ let map=null,markers=[],activeInfo=null,currentData=[];
+ function categorize(row){
+   let s=String(row['시도']||row.sido||row.region||'').trim();
+   if(!s) s=String(row['발생지역']||row.area||'');
+   if(/^(서울)/.test(s)) return '서울';if(/^(경기)/.test(s))return '경기';if(/^(인천)/.test(s))return '인천';
+   if(/^(강원)/.test(s))return '강원';if(/^(충남|충청남도)/.test(s))return '충남';if(/^(충북|충청북도)/.test(s))return '충북';
+   return '기타';
+ }
+ function sanitize(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+ function cleanMarkers(){markers.forEach(x=>x.setMap(null));markers=[];if(activeInfo)activeInfo.close();activeInfo=null;}
+ function render(){
+   if(!map)return;
+   cleanMarkers();let group=el('group').value, entries=currentData.filter(r=>group==='all'||(group==='other'?!['서울','경기','인천','강원','충남','충북'].includes(categorize(r)):groupMap[group].includes(categorize(r))));
+   let bounds=new kakao.maps.LatLngBounds(),num=0;
+   entries.forEach(r=>{
+     let lat=Number(r['위도']??r.lat??r.latitude),lon=Number(r['경도']??r.lon??r.lng??r.longitude);
+     if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132)return;
+     let pos=new kakao.maps.LatLng(lat,lon),mark=new kakao.maps.Marker({position:pos,map});markers.push(mark);bounds.extend(pos);num++;
+     kakao.maps.event.addListener(mark,'click',()=>{
+       if(activeInfo)activeInfo.close();
+       let t=sanitize(r['발생일시']??r.time??''),desc=sanitize(r['사고내용']??r.description??''),detail=sanitize(r['구분2']??r.category??''),addr=sanitize(r['주소']??r['도로명주소(좌표기준)']??r['지번주소(좌표기준)']??'');
+       let link='https://map.kakao.com/link/map/'+encodeURIComponent(lat+','+lon);
+       let html='<div class="popup" style="padding:10px"><strong>'+t+'</strong>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div><a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
+       activeInfo=new kakao.maps.InfoWindow({content:html,removable:true});activeInfo.open(map,mark);
+     });
+   });
+   if(num)map.setBounds(bounds);
+   status(el('day').value+' · 지도 표시 '+num+'건'+(entries.length!==num?' (좌표 없는 '+(entries.length-num)+'건 제외)':'')+' / 전국 원본 '+currentData.length+'건');
+ }
+ async function loadData(){
+   let day=el('day').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){status('조회 날짜를 선택하세요.');return;}
+   status(day+' 자료를 확인 중…');currentData=[];cleanMarkers();
+   try{
+     const res=await fetch('./data/'+day+'.json?v='+Date.now(),{cache:'no-store'});
+     if(!res.ok){if(res.status===404){status(day+' 지도 데이터가 아직 게시되지 않았습니다. (지도 자체는 정상 작동 중)');return;}throw Error('HTTP '+res.status);}
+     const data=await res.json();currentData=Array.isArray(data)?data:Array.isArray(data.fires)?data.fires:Array.isArray(data.records)?data.records:[];
+     if(!currentData.length){status(day+' 등록된 화재정보가 없습니다.');return;}
+     render();
+   }catch(e){status('자료 불러오기 실패: '+e.message);}
+ }
+ function initMap(){
+   kakao.maps.load(()=>{
+     map=new kakao.maps.Map(el('map'),{center:new kakao.maps.LatLng(36.35,127.85),level:13});
+     kakao.maps.addControl(map,new kakao.maps.ZoomControl(),kakao.maps.ControlPosition.RIGHT);
+     loadData();
+   });
+ }
+ function loadSdk(key){
+   if(!key){el('keyBox').classList.add('visible');status('카카오 JavaScript 키를 입력하면 지도가 표시됩니다.');return;}
+   status('카카오 지도를 불러오는 중…');el('keyBox').classList.remove('visible');
+   let old=el('kakaoSdk');if(old)old.remove();
+   const script=document.createElement('script');script.id='kakaoSdk';script.async=true;
+   script.src='https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey='+encodeURIComponent(key);
+   script.onload=()=>{if(window.kakao?.maps)initMap();else {status('카카오 지도 초기화 실패: JavaScript 키 및 도메인 등록을 확인하세요.');el('keyBox').classList.add('visible');}};
+   script.onerror=()=>{status('카카오 지도 SDK를 불러오지 못했습니다. JavaScript 키와 카카오맵 API 사용 설정을 확인하세요.');el('keyBox').classList.add('visible');};
+   document.head.appendChild(script);
+ }
+ el('refresh').addEventListener('click',loadData);el('day').addEventListener('change',loadData);el('group').addEventListener('change',()=>{if(currentData.length)render();});
+ el('saveKey').addEventListener('click',()=>{let key=el('kakaoKey').value.trim();if(!key){status('JavaScript 키를 입력해 주세요.');return;}localStorage.setItem('firemap-kakao-js-key',key);loadSdk(key);});
+ el('changeKey').addEventListener('click',()=>{el('keyBox').classList.add('visible');el('kakaoKey').value=localStorage.getItem('firemap-kakao-js-key')||'';});
+ loadSdk(localStorage.getItem('firemap-kakao-js-key')||'');
+})();
+</script>
+</body>
+</html>
