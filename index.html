@@ -28,13 +28,13 @@
 <section class="controls">
   <label>화재 발생일 <input type="date" id="day"></label>
   <label>지역 그룹 <select id="group"><option value="all">전국전체</option><option value="capital">수도권 (서울·경기·인천)</option><option value="mid">충청강원권 (강원·충남·충북)</option><option value="other">기타지역</option></select></label>
-  <label>피해규모 <select id="damage"><option value="all">전체</option><option value="high">1,000만원 이상</option><option value="closed">종결 유일 후보</option><option value="unknown">피해액 미확인</option></select></label>
+  <label>피해규모 <select id="damage"><option value="all">전체</option><option value="high">1,000만원 이상</option><option value="closed">종결 유일 후보</option><option value="unknown">피해액 미확인</option><option value="sms">재난문자 후보</option></select></label>
   <button id="refresh">조회</button>
 </section>
 <div id="keyBox"><label style="flex:1">카카오 JavaScript 키 (개인 브라우저에만 보관)<input id="kakaoKey" placeholder="JavaScript 키를 붙여넣으세요" autocomplete="off" spellcheck="false"></label><button id="saveKey">지도 열기</button></div>
 <div id="status" role="status">지도 준비 중…</div>
 <div id="map" aria-label="화재 위치 지도"></div>
-<div class="legend" style="padding:10px 18px;background:#fff;font-size:12px;line-height:1.8">⚪ 미확인　<span style="color:#414141">●</span> 종결 후보·금액 미확인　<span style="color:#3384ef">●</span> 1천만 미만　<span style="color:#c59a00">●</span> 1천만~5천만 미만　<span style="color:#ef8c29">●</span> 5천만~1억 미만　<span style="color:#e04343">●</span> 1억~5억 미만　<span style="color:#943dcc">●</span> 5억 이상<br>시간은 신고 및 상황종료 기준입니다. 오인·허위 신고 확인건은 제외합니다. 금액은 NFDS 게시액 또는 지역 증가분 기반 잠정 추정액이며 확정 손해액이 아닙니다.</div>
+<div class="legend" style="padding:10px 18px;background:#fff;font-size:12px;line-height:1.8">⚪ 미확인　<span style="color:#414141">●</span> 종결 후보·금액 미확인　<span style="color:#3384ef">●</span> 1천만 미만　<span style="color:#c59a00">●</span> 1천만~5천만 미만　<span style="color:#ef8c29">●</span> 5천만~1억 미만　<span style="color:#e04343">●</span> 1억~5억 미만　<span style="color:#943dcc">●</span> 5억 이상　🚨 재난문자 연계 후보<br>시간은 신고 및 상황종료 기준입니다. 오인·허위 신고 확인건은 제외합니다. 금액은 NFDS 게시액 또는 지역 증가분 기반 잠정 추정액이며 확정 손해액이 아닙니다.</div>
 <details open style="background:white;padding:12px 18px"><summary>화재 목록 (마커 선택 및 상세정보)</summary><div id="fireList" style="max-height:420px;overflow:auto"></div></details>
 <div class="help">선택한 날짜의 화재 위치만 표시합니다. 마커를 누르면 상세주소와 카카오맵 링크를 볼 수 있습니다. <button id="changeKey" type="button">지도 키 변경</button><div>화재정보는 공개 지도 데이터 파일(<code>data/YYYY-MM-DD.json</code>)을 연결한 후 표시됩니다. 공개 웹사이트이므로 업로드한 사고정보는 외부에서도 볼 수 있습니다.</div></div>
 <script>
@@ -58,6 +58,7 @@
  }
  function sanitize(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
  function cleanMarkers(){markers.forEach(x=>x.setMap(null));markers=[];if(activeInfo)activeInfo.close();activeInfo=null;}
+ const smsMatch=r=>r['재난문자후보']===true;
  const palette={dark:'#414141',gray:'#999999',blue:'#3384ef',yellow:'#eac137',orange:'#ef8c29',red:'#e04343',purple:'#943dcc'};
  function amountText(r){return typeof r['피해액원']==='number'&&Number.isFinite(r['피해액원'])?r['피해액원'].toLocaleString('ko-KR')+'원':'미확인';}
  function durationText(r){
@@ -70,19 +71,20 @@
  }
  function markerImage(r){
    const color=palette[r['마커색상']]||palette.gray;
-   const pin='<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42"><path d="M16 1C7 1 2 7 2 16c0 10 14 25 14 25s14-15 14-25C30 7 25 1 16 1Z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/><circle cx="16" cy="15" r="5.5" fill="#fff"/></svg>';
+   const badge=smsMatch(r)?'<circle cx="25" cy="8" r="7" fill="#b91c1c" stroke="white" stroke-width="1.5"/><path d="M25 4v5m0 2v1" stroke="white" stroke-width="2" stroke-linecap="round"/>':'';
+   const pin='<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42"><path d="M16 1C7 1 2 7 2 16c0 10 14 25 14 25s14-15 14-25C30 7 25 1 16 1Z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/><circle cx="16" cy="15" r="5.5" fill="#fff"/>'+badge+'</svg>';
    return new kakao.maps.MarkerImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(pin),new kakao.maps.Size(32,42),{offset:new kakao.maps.Point(16,41)});
  }
  function render(){
    if(!map)return;
    cleanMarkers();let group=el('group').value, entries=currentData.filter(r=>group==='all'||(group==='other'?!['서울','경기','인천','강원','충남','충북'].includes(categorize(r)):groupMap[group].includes(categorize(r))));
    const f=el('damage').value;
-   entries=entries.filter(r=>f==='all'||(f==='high'&&typeof r['피해액원']==='number'&&r['피해액원']>=10000000)||(f==='closed'&&r['종결여부']==='종결 유일 후보')||(f==='unknown'&&typeof r['피해액원']!=='number'));
+   entries=entries.filter(r=>f==='all'||(f==='high'&&typeof r['피해액원']==='number'&&r['피해액원']>=10000000)||(f==='closed'&&r['종결여부']==='종결 유일 후보')||(f==='unknown'&&typeof r['피해액원']!=='number')||(f==='sms'&&smsMatch(r)));
    el('fireList').replaceChildren();
    let bounds=new kakao.maps.LatLngBounds(),num=0;
    entries.forEach(r=>{
      const item=document.createElement('button');item.type='button';item.style.cssText='display:block;width:100%;text-align:left;background:#fff;color:#14233a;border:0;border-bottom:1px solid #ddd;border-radius:0;padding:10px';
-     item.textContent='● '+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
+     item.textContent=(smsMatch(r)?'🚨 ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
      item.style.borderLeft='5px solid '+(palette[r['마커색상']]||palette.gray);el('fireList').appendChild(item);
      let lat=Number(r['위도']??r.lat??r.latitude),lon=Number(r['경도']??r.lon??r.lng??r.longitude);
      if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132)return;
@@ -91,7 +93,8 @@
        if(activeInfo)activeInfo.close();
        let t=sanitize(r['발생일시']??r.time??''),desc=sanitize(r['사고내용']??r.description??''),detail=sanitize(r['구분2']??r.category??''),addr=sanitize(r['주소']??r['도로명주소(좌표기준)']??r['지번주소(좌표기준)']??'');
        let link='https://map.kakao.com/link/map/'+encodeURIComponent(lat+','+lon);
-       let html='<div class="popup" style="padding:10px"><strong>신고: '+t+'</strong><div>종료: '+sanitize(r['상황종료일시']||'미확인')+'</div><div>소요: '+sanitize(durationText(r))+'</div><div>진행: '+sanitize(r['진행상태']||'미확인')+'</div><div>소방관서: '+sanitize(r['소방관서']||'미확인')+'</div>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div><div>종결: '+sanitize(r['종결여부']||'미확인')+'</div><div>피해액: '+sanitize(amountText(r))+' ('+sanitize(r['피해액구분']||'미확인')+')</div><div>신뢰도: '+sanitize(r['매칭신뢰도']||'미확인')+'</div><div>분석: '+sanitize(r['분석시각']||'미확인')+'</div><a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
+       const smsInfo=smsMatch(r)?'<div style="color:#b91c1c;font-weight:700">🚨 재난문자 연계 후보</div><div>문자 발송: '+sanitize((Array.isArray(r['재난문자발송일시'])?r['재난문자발송일시']:[]).join(', '))+'</div><div>주소·시간 일치 후보 (확정 아님)</div>':'';
+       let html='<div class="popup" style="padding:10px"><strong>신고: '+t+'</strong><div>종료: '+sanitize(r['상황종료일시']||'미확인')+'</div><div>소요: '+sanitize(durationText(r))+'</div><div>진행: '+sanitize(r['진행상태']||'미확인')+'</div><div>소방관서: '+sanitize(r['소방관서']||'미확인')+'</div>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div><div>종결: '+sanitize(r['종결여부']||'미확인')+'</div><div>피해액: '+sanitize(amountText(r))+' ('+sanitize(r['피해액구분']||'미확인')+')</div><div>신뢰도: '+sanitize(r['매칭신뢰도']||'미확인')+'</div><div>분석: '+sanitize(r['분석시각']||'미확인')+'</div>'+smsInfo+'<a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
        activeInfo=new kakao.maps.InfoWindow({content:html,removable:true});activeInfo.open(map,mark);
      };
      kakao.maps.event.addListener(mark,'click',show);item.addEventListener('click',()=>{map.panTo(pos);show();el('map').scrollIntoView({behavior:'smooth'});});
