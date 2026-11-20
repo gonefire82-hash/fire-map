@@ -44,7 +44,53 @@
  const fmtDate=(d)=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
  el('day').value=fmtDate(new Date());
  const groupMap={capital:['서울','경기','인천'],mid:['강원','충남','충북']};
- let map=null,markers=[],activeInfo=null,currentData=[];
+ let map=null,markers=[],activeInfo=null,currentData=[],liveB14=new Set(),b14Status='',loadToken=0;
+ const B14_API='https://nfds-damage-pilot.gonefire82.workers.dev/b14';
+ const b14Confirmed=r=>r['B14확인']===true||liveB14.has(r['지도ID']);
+ function whenMillis(s){
+   const a=String(s||'').trim();
+   return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(a)
+     ?Date.parse(a.replace(' ','T')+(a.length===16?':00':'')+'+09:00'):NaN;
+ }
+ function addressMatch(mapAddress,sourceAddress){
+   const compress=s=>String(s||'').replace(/[^가-힣a-zA-Z0-9]/g,'');
+   const hay=compress(mapAddress),parts=String(sourceAddress||'').trim().split(/\s+/).slice(1);
+   return !!hay&&parts.length>0&&parts.every(x=>compress(x).length>=2&&hay.includes(compress(x)));
+ }
+ async function loadLiveB14(day,token){
+   try{
+     const controller=new AbortController();
+     const timeout=setTimeout(()=>controller.abort(),8500);
+     let result;
+     try{
+       const res=await fetch(B14_API+'?day='+encodeURIComponent(day)+'&v='+Date.now(),{cache:'no-store',signal:controller.signal});
+       if(!res.ok)throw Error('HTTP '+res.status);
+       result=await res.json();
+     }finally{clearTimeout(timeout);}
+     if(loadToken!==token)return;
+     const items=Array.isArray(result.incidents)?result.incidents:[];
+     const marked=new Set();
+     for(const fire of items){
+       const time=whenMillis(fire.occurred_at);
+       if(!Number.isFinite(time))continue;
+       const options=currentData.filter(r=>{
+         const t=whenMillis(r['발생일시']);
+         return Number.isFinite(t)&&Math.abs(t-time)<=3*60000&&addressMatch(r['주소'],fire.address);
+       });
+       if(options.length===1)marked.add(options[0]['지도ID']);
+     }
+     liveB14=marked;
+     const status=result.lastAttemptStatus;
+     b14Status='B14 직접 조회 '+items.length+'건 · 지도 연결 '+marked.size+'건'
+       +(status==='failed'?' (최근 서버 조회 실패, 이전 확보자료 유지)':
+         status==='partial'?' (일부 페이지 수집)':'');
+     render();
+   }catch(e){
+     if(loadToken!==token)return;
+     b14Status='B14 직접 조회 불가 (기존 지도 표시 유지)';
+     render();
+   }
+ }
  function categorize(row){
    const code=String(row["시도코드"]||"").slice(0,2);
    const codes={"11":"서울","28":"인천","41":"경기","42":"강원","51":"강원","43":"충북","44":"충남"};
@@ -71,7 +117,7 @@
  }
  function markerImage(r){
    const color=palette[r['마커색상']]||palette.gray;
-   const confirmed=r['B14확인']===true;
+   const confirmed=b14Confirmed(r);
    const badge=smsMatch(r)?'<circle cx="25" cy="8" r="7" fill="#b91c1c" stroke="white" stroke-width="1.5"/><path d="M25 4v5m0 2v1" stroke="white" stroke-width="2" stroke-linecap="round"/>':'';
    const body=confirmed?'<path d="M16 1 L30 20 L16 40 L2 20 Z" fill="'+color+'" stroke="#fff" stroke-width="2"/><circle cx="16" cy="20" r="5" fill="#fff"/>':'<path d="M16 1C7 1 2 7 2 16c0 10 14 25 14 25s14-15 14-25C30 7 25 1 16 1Z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/><circle cx="16" cy="15" r="5.5" fill="#fff"/>';
    const pin='<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'+body+badge+'</svg>';
@@ -81,12 +127,12 @@
    if(!map)return;
    cleanMarkers();let group=el('group').value, entries=currentData.filter(r=>group==='all'||(group==='other'?!['서울','경기','인천','강원','충남','충북'].includes(categorize(r)):groupMap[group].includes(categorize(r))));
    const f=el('damage').value;
-   entries=entries.filter(r=>f==='all'||(f==='high'&&typeof r['피해액원']==='number'&&r['피해액원']>=10000000)||(f==='closed'&&r['B14확인']===true)||(f==='unknown'&&typeof r['피해액원']!=='number')||(f==='sms'&&smsMatch(r)));
+   entries=entries.filter(r=>f==='all'||(f==='high'&&typeof r['피해액원']==='number'&&r['피해액원']>=10000000)||(f==='closed'&&b14Confirmed(r))||(f==='unknown'&&typeof r['피해액원']!=='number')||(f==='sms'&&smsMatch(r)));
    el('fireList').replaceChildren();
    let bounds=new kakao.maps.LatLngBounds(),num=0;
    entries.forEach(r=>{
      const item=document.createElement('button');item.type='button';item.style.cssText='display:block;width:100%;text-align:left;background:#fff;color:#14233a;border:0;border-bottom:1px solid #ddd;border-radius:0;padding:10px';
-     item.textContent=(smsMatch(r)?'🚨 ':'')+(r['B14확인']===true?'◆ ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
+     item.textContent=(smsMatch(r)?'🚨 ':'')+(b14Confirmed(r)?'◆ ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
      item.style.borderLeft='5px solid '+(palette[r['마커색상']]||palette.gray);el('fireList').appendChild(item);
      let lat=Number(r['위도']??r.lat??r.latitude),lon=Number(r['경도']??r.lon??r.lng??r.longitude);
      if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132)return;
@@ -96,24 +142,26 @@
        let t=sanitize(r['발생일시']??r.time??''),desc=sanitize(r['사고내용']??r.description??''),detail=sanitize(r['구분2']??r.category??''),addr=sanitize(r['주소']??r['도로명주소(좌표기준)']??r['지번주소(좌표기준)']??'');
        let link='https://map.kakao.com/link/map/'+encodeURIComponent(lat+','+lon);
        const smsInfo=smsMatch(r)?'<div style="color:#b91c1c;font-weight:700">🚨 재난문자 연계 후보</div><div>문자 발송: '+sanitize((Array.isArray(r['재난문자발송일시'])?r['재난문자발송일시']:[]).join(', '))+'</div><div>주소·시간 일치 후보 (확정 아님)</div>':'';
-       let html='<div class="popup" style="padding:10px"><strong>신고: '+t+'</strong><div>종료: '+sanitize(r['상황종료일시']||'미확인')+'</div><div>소요: '+sanitize(durationText(r))+'</div><div>진행: '+sanitize(r['진행상태']||'미확인')+'</div><div>소방관서: '+sanitize(r['소방관서']||'미확인')+'</div>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div><div>B14: '+(r['B14확인']===true?'확인':'미확인')+'</div><div>종결: '+sanitize(r['종결여부']||'미확인')+'</div><div>피해액: '+sanitize(amountText(r))+' ('+sanitize(r['피해액구분']||'미확인')+')</div><div>신뢰도: '+sanitize(r['매칭신뢰도']||'미확인')+'</div><div>분석: '+sanitize(r['분석시각']||'미확인')+'</div>'+smsInfo+'<a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
+       let html='<div class="popup" style="padding:10px"><strong>신고: '+t+'</strong><div>종료: '+sanitize(r['상황종료일시']||'미확인')+'</div><div>소요: '+sanitize(durationText(r))+'</div><div>진행: '+sanitize(r['진행상태']||'미확인')+'</div><div>소방관서: '+sanitize(r['소방관서']||'미확인')+'</div>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div><div>B14: '+(b14Confirmed(r)?'확인':'미확인')+'</div><div>종결: '+sanitize(r['종결여부']||'미확인')+'</div><div>피해액: '+sanitize(amountText(r))+' ('+sanitize(r['피해액구분']||'미확인')+')</div><div>신뢰도: '+sanitize(r['매칭신뢰도']||'미확인')+'</div><div>분석: '+sanitize(r['분석시각']||'미확인')+'</div>'+smsInfo+'<a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
        activeInfo=new kakao.maps.InfoWindow({content:html,removable:true});activeInfo.open(map,mark);
      };
      kakao.maps.event.addListener(mark,'click',show);item.addEventListener('click',()=>{map.panTo(pos);show();el('map').scrollIntoView({behavior:'smooth'});});
    });
    if(num)map.setBounds(bounds);
-   status(el('day').value+' · 지도 표시 '+num+'건'+(entries.length!==num?' (좌표 없는 '+(entries.length-num)+'건 제외)':'')+' / 전국 공개 목록 '+currentData.length+'건');
+   status(el('day').value+' · 지도 표시 '+num+'건'+(entries.length!==num?' (좌표 없는 '+(entries.length-num)+'건 제외)':'')+' / 전국 공개 목록 '+currentData.length+'건'+(b14Status?' · '+b14Status:''));
  }
  async function loadData(){
    let day=el('day').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){status('조회 날짜를 선택하세요.');return;}
-   status(day+' 자료를 확인 중…');currentData=[];cleanMarkers();el('fireList').replaceChildren();
+   status(day+' 자료를 확인 중…');const token=++loadToken;liveB14=new Set();b14Status='';currentData=[];cleanMarkers();el('fireList').replaceChildren();
    try{
      const res=await fetch('./data/'+day+'.json?v='+Date.now(),{cache:'no-store'});
      if(!res.ok){if(res.status===404){status(day+' 지도 데이터가 아직 게시되지 않았습니다. (지도 자체는 정상 작동 중)');return;}throw Error('HTTP '+res.status);}
-     const data=await res.json();currentData=Array.isArray(data)?data:Array.isArray(data.fires)?data.fires:Array.isArray(data.records)?data.records:[];
+     const data=await res.json();if(loadToken!==token)return;currentData=Array.isArray(data)?data:Array.isArray(data.fires)?data.fires:Array.isArray(data.records)?data.records:[];
      if(!currentData.length){status(day+' 등록된 화재정보가 없습니다.');return;}
      render();
-   }catch(e){status('자료 불러오기 실패: '+e.message);}
+     // Read the independently updated Cloudflare B14 cache. Do not block base map.
+     void loadLiveB14(day,token);
+   }catch(e){if(loadToken===token)status('자료 불러오기 실패: '+e.message);}
  }
  function initMap(){
    kakao.maps.load(()=>{
