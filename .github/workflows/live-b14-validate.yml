@@ -1,0 +1,29 @@
+name: Validate live B14 map overlay
+on:
+  pull_request:
+    paths:
+      - 'index.html'
+      - '.github/workflows/live-b14-validate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate embedded map JavaScript
+        run: |
+          node - <<'JS'
+          const fs=require('node:fs');
+          const html=fs.readFileSync('index.html','utf8');
+          const m=html.match(/<script>([\s\S]*?)<\/script>/);
+          if(!m)throw Error('map script missing');
+          new Function(m[1]);
+          for(const s of ['loadLiveB14(day,token)','B14_API','b14Confirmed(r)','addressMatch('])
+            if(!m[1].includes(s))throw Error('B14 integration missing: '+s);
+          console.log('Live B14 overlay JavaScript syntax and hooks PASS');
+          JS
