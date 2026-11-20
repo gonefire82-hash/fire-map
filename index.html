@@ -52,10 +52,15 @@
    return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(a)
      ?Date.parse(a.replace(' ','T')+(a.length===16?':00':'')+'+09:00'):NaN;
  }
- function addressMatch(mapAddress,sourceAddress){
+ function addressMatch(mapAddress,sourceAddress,strict=true){
    const compress=s=>String(s||'').replace(/[^가-힣a-zA-Z0-9]/g,'');
-   const hay=compress(mapAddress),parts=String(sourceAddress||'').trim().split(/\s+/).slice(1);
-   return !!hay&&parts.length>0&&parts.every(x=>compress(x).length>=2&&hay.includes(compress(x)));
+   const hay=compress(mapAddress),parts=String(sourceAddress||'').trim().split(/\s+/);
+   if(!hay||parts.length<2)return false;
+   const required=strict?parts:parts.slice(0,-1);
+   // Road-name geocoding may omit the fire report's final neighborhood name.
+   // Relax only when full matching fails, and only within one city/district.
+   if(!strict&&parts.length<3)return false;
+   return required.every(x=>compress(x).length>=2&&hay.includes(compress(x)));
  }
  async function loadLiveB14(day,token){
    try{
@@ -73,10 +78,13 @@
      for(const fire of items){
        const time=whenMillis(fire.occurred_at);
        if(!Number.isFinite(time))continue;
-       const options=currentData.filter(r=>{
+       const nearby=currentData.filter(r=>{
          const t=whenMillis(r['발생일시']);
-         return Number.isFinite(t)&&Math.abs(t-time)<=3*60000&&addressMatch(r['주소'],fire.address);
+         return Number.isFinite(t)&&Math.abs(t-time)<=3*60000;
        });
+       const exact=nearby.filter(r=>addressMatch(r['주소'],fire.address));
+       const options=exact.length?exact:nearby.filter(r=>addressMatch(r['주소'],fire.address,false));
+       // Never assert a B14 match when two map records remain plausible.
        if(options.length===1)marked.add(options[0]['지도ID']);
      }
      liveB14=marked;
