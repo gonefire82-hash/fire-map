@@ -1,1 +1,1 @@
-{"corrections":{},"last_attempt_slot":"2026-11-24","last_attempt_kst":"2026-11-24T23:37:45+09:00","status":"query_failed"}
+{"corrections":{},"last_attempt_slot":"2026-11-24","last_attempt_kst":"2026-11-25T00:50:59+09:00","status":"query_failed","attempt_count":1,"query_from":"2026-11-18","query_to":"2026-11-24","last_error":"HTTP=200; content_type=text/html; bytes=473; format=xml; page=1; dates=2026-11-18..2026-11-24"}
