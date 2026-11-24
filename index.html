@@ -34,7 +34,7 @@
 <div id="keyBox"><label style="flex:1">카카오 JavaScript 키 (개인 브라우저에만 보관)<input id="kakaoKey" placeholder="JavaScript 키를 붙여넣으세요" autocomplete="off" spellcheck="false"></label><button id="saveKey">지도 열기</button></div>
 <div id="status" role="status">지도 준비 중…</div>
 <div id="map" aria-label="화재 위치 지도"></div>
-<div class="legend" style="padding:10px 18px;background:#fff;font-size:12px;line-height:1.8">⚪ B14 미확인(기존 마커)　◆ B14 확인(마름모)　<span style="color:#414141">●</span> 종결 후보·금액 미확인　<span style="color:#3384ef">●</span> 1천만 미만　<span style="color:#c59a00">●</span> 1천만~5천만 미만　<span style="color:#ef8c29">●</span> 5천만~1억 미만　<span style="color:#e04343">●</span> 1억~5억 미만　<span style="color:#943dcc">●</span> 5억 이상　🚨 재난문자 연계 후보<br>시간은 신고 및 상황종료 기준입니다. B14 확인은 수집된 실제 사고 목록을 기준으로 하며 출동 상태로 마커를 제외하지 않습니다. 금액은 NFDS 게시액 또는 지역 증가분 기반 잠정 추정액이며 확정 손해액이 아닙니다.</div>
+<div class="legend" style="padding:10px 18px;background:#fff;font-size:12px;line-height:1.8">⚪ B14 미확인(기존 마커)　◆ B14 확인(마름모)　<span style="color:#414141">●</span> 종결 후보·금액 미확인　<span style="color:#3384ef">●</span> 500만 미만　<span style="color:#c59a00">●</span> 500만~2천만 미만　<span style="color:#ef8c29">●</span> 2천만~5천만 미만　<span style="color:#e04343">●</span> 5천만~1억 미만　<span style="color:#943dcc">●</span> 1억 이상　🚨 재난문자 연계 후보<br>시간은 신고 및 상황종료 기준입니다. B14 확인은 수집된 실제 사고 목록을 기준으로 하며 출동 상태로 마커를 제외하지 않습니다. 금액은 NFDS 게시액, 지역 증가분 기반 잠정 추정액 또는 소방청 API 게시 피해액이며 보험 손해액 확정값은 아닙니다.</div>
 <details open style="background:white;padding:12px 18px"><summary>화재 목록 (마커 선택 및 상세정보)</summary><div id="fireList" style="max-height:420px;overflow:auto"></div></details>
 <div class="help">선택한 날짜의 화재 위치만 표시합니다. 마커를 누르면 상세주소와 카카오맵 링크를 볼 수 있습니다. <button id="changeKey" type="button">지도 키 변경</button><div>화재정보는 공개 지도 데이터 파일(<code>data/YYYY-MM-DD.json</code>)을 연결한 후 표시됩니다. 공개 웹사이트이므로 업로드한 사고정보는 외부에서도 볼 수 있습니다.</div></div>
 <script>
@@ -114,6 +114,7 @@
  function cleanMarkers(){markers.forEach(x=>x.setMap(null));markers=[];if(activeInfo)activeInfo.close();activeInfo=null;}
  const smsMatch=r=>r['재난문자후보']===true;
  const palette={dark:'#414141',gray:'#999999',blue:'#3384ef',yellow:'#eac137',orange:'#ef8c29',red:'#e04343',purple:'#943dcc'};
+ function damageColor(r){const v=r['피해액원'];if(typeof v!=='number'||!Number.isFinite(v)||v<0)return palette[r['마커색상']]||palette.gray;return palette[v<5000000?'blue':v<20000000?'yellow':v<50000000?'orange':v<100000000?'red':'purple'];}
  function amountText(r){return typeof r['피해액원']==='number'&&Number.isFinite(r['피해액원'])?r['피해액원'].toLocaleString('ko-KR')+'원':'미확인';}
  function durationText(r){
    const a=String(r['발생일시']||''), b=String(r['상황종료일시']||'');
@@ -124,7 +125,7 @@
    return (a.length===16||b.length===16?'약 ':'')+(h?h+'시간 ':'')+m+'분 '+sec+'초';
  }
  function markerImage(r){
-   const color=palette[r['마커색상']]||palette.gray;
+   const color=damageColor(r);
    const confirmed=b14Confirmed(r);
    const badge=smsMatch(r)?'<circle cx="25" cy="8" r="7" fill="#b91c1c" stroke="white" stroke-width="1.5"/><path d="M25 4v5m0 2v1" stroke="white" stroke-width="2" stroke-linecap="round"/>':'';
    const body=confirmed?'<path d="M16 1 L30 20 L16 40 L2 20 Z" fill="'+color+'" stroke="#fff" stroke-width="2"/><circle cx="16" cy="20" r="5" fill="#fff"/>':'<path d="M16 1C7 1 2 7 2 16c0 10 14 25 14 25s14-15 14-25C30 7 25 1 16 1Z" fill="'+color+'" stroke="#fff" stroke-width="1.5"/><circle cx="16" cy="15" r="5.5" fill="#fff"/>';
@@ -141,7 +142,7 @@
    entries.forEach(r=>{
      const item=document.createElement('button');item.type='button';item.style.cssText='display:block;width:100%;text-align:left;background:#fff;color:#14233a;border:0;border-bottom:1px solid #ddd;border-radius:0;padding:10px';
      item.textContent=(smsMatch(r)?'🚨 ':'')+(b14Confirmed(r)?'◆ ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
-     item.style.borderLeft='5px solid '+(palette[r['마커색상']]||palette.gray);el('fireList').appendChild(item);
+     item.style.borderLeft='5px solid '+(damageColor(r));el('fireList').appendChild(item);
      let lat=Number(r['위도']??r.lat??r.latitude),lon=Number(r['경도']??r.lon??r.lng??r.longitude);
      if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132)return;
      let pos=new kakao.maps.LatLng(lat,lon),mark=new kakao.maps.Marker({position:pos,map,image:markerImage(r)});markers.push(mark);bounds.extend(pos);num++;
