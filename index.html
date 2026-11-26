@@ -20,6 +20,11 @@
     #keyBox.visible{display:flex}#keyBox input{min-width:240px;flex:1}
     .popup{font-size:13px;line-height:1.6;max-width:260px;overflow-wrap:anywhere}
     .popup strong{display:block;font-size:14px}.popup a{display:inline-block;margin-top:5px}
+    .manual-panel{border:0;border-radius:12px;padding:16px;width:min(94vw,420px);max-height:88dvh;overflow:auto;color:#14233a}
+    .manual-panel::backdrop{background:#0006}.manual-panel label{margin:10px 0}.manual-panel textarea{font:inherit;border:1px solid #c8d2df;border-radius:8px;padding:9px;resize:vertical;width:100%}
+    .manual-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.manual-actions button{flex:1}.manual-secondary{background:white;color:#1d4972}
+    .manual-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 18px;background:#fff;font-size:12px}
+    .manual-tools button{font-size:12px;min-height:32px;padding:5px 9px}.manual-edit{display:block;width:100%;font-size:12px;min-height:34px;padding:5px;margin-top:8px}
     @media(max-width:580px){.controls{padding:10px;gap:8px}.controls label{flex:1;min-width:135px}.controls input,.controls select{width:100%}#map{height:calc(100dvh - 234px)}header{font-size:16px}}
   </style>
 </head>
@@ -29,8 +34,15 @@
   <label>화재 발생일 <input type="date" id="day"></label>
   <label>지역 그룹 <select id="group"><option value="all">전국전체</option><option value="capital">수도권 (서울·경기·인천)</option><option value="mid">충청강원권 (강원·충남·충북)</option><option value="other">기타지역</option></select></label>
   <label>피해규모 <select id="damage"><option value="all">전체</option><option value="high">1,000만원 이상</option><option value="closed">B14 확인 화재</option><option value="official">소방청 API 피해액 확인 화재</option><option value="unknown">피해액 미확인</option><option value="sms">재난문자 후보</option></select></label>
+  <label>내 표시 <select id="manualFilter"><option value="all">전체</option><option value="marked">표시·메모 있음</option><option value="interest">⭐ 관심 사고</option><option value="sms">🚨 재난문자 확인</option><option value="planned">🚗 방문 예정</option><option value="done">✅ 방문 완료</option><option value="skip">❌ 방문 불필요</option></select></label>
   <button id="refresh">조회</button>
 </section>
+<div class="manual-tools"><span>내 표시·메모: 이 브라우저에만 저장</span><button id="exportNotes" type="button">내보내기</button><button id="importNotes" type="button">가져오기</button><input id="notesFile" type="file" accept=".json,application/json" hidden><span id="notesStatus" role="status"></span></div>
+<dialog id="manualDialog" class="manual-panel"><form id="manualForm"><strong>내 사고 표시</strong><p id="manualIncident" style="font-size:13px;overflow-wrap:anywhere"></p>
+<label><span>관심 및 정보</span><span><input type="checkbox" id="manualInterest" style="min-height:0"> ⭐ 관심 사고</span><span><input type="checkbox" id="manualSms" style="min-height:0"> 🚨 재난문자 확인</span></label>
+<label>방문 상태<select id="manualVisit"><option value="">미지정</option><option value="planned">🚗 방문 예정</option><option value="done">✅ 방문 완료</option><option value="skip">❌ 방문 불필요</option></select></label>
+<label>특이사항 및 메모<textarea id="manualMemo" rows="4" maxlength="2000" placeholder="방문 일정, 확인할 내용 등"></textarea></label>
+<div class="manual-actions"><button type="submit">저장</button><button type="button" class="manual-secondary" id="clearNote">표시 지우기</button><button type="button" class="manual-secondary" id="cancelNote">취소</button></div></form></dialog>
 <div id="keyBox"><label style="flex:1">카카오 JavaScript 키 (개인 브라우저에만 보관)<input id="kakaoKey" placeholder="JavaScript 키를 붙여넣으세요" autocomplete="off" spellcheck="false"></label><button id="saveKey">지도 열기</button></div>
 <div id="status" role="status">지도 준비 중…</div>
 <div id="map" aria-label="화재 위치 지도"></div>
@@ -46,6 +58,66 @@
  const groupMap={capital:['서울','경기','인천'],mid:['강원','충남','충북']};
  let map=null,markers=[],noteOverlays=[],activeInfo=null,currentData=[],liveB14=new Set(),b14Status='',loadToken=0;
  const B14_API='https://nfds-damage-pilot.gonefire82.workers.dev/b14';
+ const NOTE_KEY='firemap-private-notes-v1', VISITS={planned:'🚗',done:'✅',skip:'❌'};
+ const validId=id=>typeof id==='string'&&/^[a-f0-9]{64}$/i.test(id);
+ const blankNote=()=>({interest:false,sms:false,visit:'',memo:'',updated:0});
+ function normalizeNote(value){
+   if(!value||typeof value!=='object'||Array.isArray(value)||!Number.isSafeInteger(value.updated)||value.updated<0||value.updated>Date.now()+86400000)throw Error('표시자료 형식 오류');
+   return {interest:value.interest===true,sms:value.sms===true,visit:Object.hasOwn(VISITS,value.visit)?value.visit:'',memo:typeof value.memo==='string'?value.memo.slice(0,2000):'',updated:value.updated};
+ }
+ function parseNotes(obj){
+   if(!obj||obj.version!==1||!obj.notes||typeof obj.notes!=='object'||Array.isArray(obj.notes))throw Error('지원하지 않는 표시자료 형식');
+   const out=Object.create(null);
+   for(const [id,val] of Object.entries(obj.notes)){if(!validId(id))throw Error('사고 ID 형식 오류');out[id]=normalizeNote(val);}
+   return out;
+ }
+ let notes=Object.create(null), editingId=null, notesReadable=true;
+ try{const raw=localStorage.getItem(NOTE_KEY);if(raw)notes=parseNotes(JSON.parse(raw));}catch(e){notesReadable=false;el('notesStatus').textContent='저장자료 읽기 실패 · 덮어쓰기 방지';}
+ function persistNotes(next){
+   if(!notesReadable)throw Error('기존 저장자료를 읽을 수 없습니다');
+   localStorage.setItem(NOTE_KEY,JSON.stringify({version:1,notes:next}));notes=next;
+ }
+ const noteFor=r=>notes[r['지도ID']]||blankNote();
+ const noteMarked=n=>!!(n.interest||n.sms||n.visit||n.memo.trim());
+ const noteIcons=n=>[n.interest?'⭐':'',n.sms?'🚨':'',VISITS[n.visit]||'',n.memo.trim()?'📝':''].filter(Boolean).join(' ');
+ function manualMatches(r,filter){
+   const n=noteFor(r);
+   return filter==='all'||(filter==='marked'&&noteMarked(n))||(filter==='interest'&&n.interest)||(filter==='sms'&&n.sms)||n.visit===filter;
+ }
+ function openEditor(r){
+   if(!validId(r['지도ID'])){el('notesStatus').textContent='이 사고에는 저장 가능한 ID가 없습니다.';return;}
+   editingId=r['지도ID'];const n=noteFor(r);
+   el('manualIncident').textContent=String(r['발생일시']||'')+' · '+String(r['주소']||'');
+   el('manualInterest').checked=n.interest;el('manualSms').checked=n.sms;el('manualVisit').value=n.visit;el('manualMemo').value=n.memo;
+   if(!el('manualDialog').open)el('manualDialog').showModal();
+ }
+ function saveEditor(clear=false){
+   if(!validId(editingId))return;
+   const n=clear?blankNote():{interest:el('manualInterest').checked,sms:el('manualSms').checked,visit:el('manualVisit').value,memo:el('manualMemo').value};
+   n.updated=Math.max(Date.now(),(notes[editingId]?.updated||0)+1);
+   try{persistNotes({...notes,[editingId]:n});el('manualDialog').close();el('notesStatus').textContent=clear?'표시 삭제됨':'내 표시 저장됨';render(true);}
+   catch(e){alert('표시 저장 실패: '+e.message);}
+ }
+ el('manualForm').addEventListener('submit',e=>{e.preventDefault();saveEditor();});
+ el('clearNote').addEventListener('click',()=>{if(confirm('이 사고의 개인 표시와 메모를 지울까요?'))saveEditor(true);});
+ el('cancelNote').addEventListener('click',()=>el('manualDialog').close());
+ el('exportNotes').addEventListener('click',()=>{
+   if(!notesReadable){alert('저장자료를 읽지 못했습니다.');return;}
+   const url=URL.createObjectURL(new Blob([JSON.stringify({version:1,notes},null,2)],{type:'application/json'}));
+   const a=document.createElement('a');a.href=url;a.download='화재지도_내표시_'+fmtDate(new Date())+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ });
+ el('importNotes').addEventListener('click',()=>el('notesFile').click());
+ el('notesFile').addEventListener('change',async e=>{
+   const file=e.target.files[0];e.target.value='';if(!file)return;
+   try{
+     if(file.size>5*1024*1024)throw Error('파일 크기 제한 초과');
+     const incoming=parseNotes(JSON.parse(await file.text())), next={...notes};let changed=0;
+     for(const [id,n] of Object.entries(incoming)){if(!next[id]||n.updated>next[id].updated){next[id]=n;changed++;}}
+     if(!confirm('더 최근에 수정된 표시 '+changed+'건을 합칠까요? (기존 최신 표시 유지)'))return;
+     persistNotes(next);el('notesStatus').textContent='표시 '+changed+'건 가져옴';render(true);
+   }catch(e){alert('가져오기 실패: '+e.message);}
+ });
+ window.addEventListener('storage',e=>{if(e.key===NOTE_KEY&&e.newValue){try{notes=parseNotes(JSON.parse(e.newValue));render(true);}catch(err){el('notesStatus').textContent='다른 탭의 표시자료 읽기 실패';}}});
  const b14Confirmed=r=>r['B14확인']===true||liveB14.has(r['지도ID']);
  function whenMillis(s){
    const a=String(s||'').trim();
@@ -133,20 +205,28 @@
    const pin='<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'+body+badge+'</svg>';
    return new kakao.maps.MarkerImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(pin),new kakao.maps.Size(32,42),{offset:new kakao.maps.Point(16,41)});
  }
- function render(){
+ function render(keepView=false){
    if(!map)return;
    cleanMarkers();let group=el('group').value, entries=currentData.filter(r=>group==='all'||(group==='other'?!['서울','경기','인천','강원','충남','충북'].includes(categorize(r)):groupMap[group].includes(categorize(r))));
    const f=el('damage').value;
    entries=entries.filter(r=>f==='all'||(f==='high'&&typeof r['피해액원']==='number'&&r['피해액원']>=10000000)||(f==='closed'&&b14Confirmed(r)&&!official(r))||(f==='official'&&official(r))||(f==='unknown'&&typeof r['피해액원']!=='number')||(f==='sms'&&smsMatch(r)));
+   entries=entries.filter(r=>manualMatches(r,el('manualFilter').value));
    el('fireList').replaceChildren();
    let bounds=new kakao.maps.LatLngBounds(),num=0;
    entries.forEach(r=>{
      const item=document.createElement('button');item.type='button';item.style.cssText='display:block;width:100%;text-align:left;background:#fff;color:#14233a;border:0;border-bottom:1px solid #ddd;border-radius:0;padding:10px';
-     item.textContent=(smsMatch(r)?'🚨 ':'')+(official(r)?'■ ':b14Confirmed(r)?'◆ ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
+     const personal=noteFor(r),icons=noteIcons(personal);
+     item.textContent=(icons?icons+' ':'')+(smsMatch(r)?'🚨 ':'')+(official(r)?'■ ':b14Confirmed(r)?'◆ ':'● ')+String(r['발생일시']||'')+' → '+String(r['상황종료일시']||'종료 미확인')+' · '+String(r['주소']||'')+' · '+String(r['사고내용']||'')+' · '+amountText(r)+' ('+(r['피해액구분']||'미확인')+')';
      item.style.borderLeft='5px solid '+(damageColor(r));el('fireList').appendChild(item);
      let lat=Number(r['위도']??r.lat??r.latitude),lon=Number(r['경도']??r.lon??r.lng??r.longitude);
-     if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132)return;
+     if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<32||lat>40||lon<124||lon>132){item.addEventListener('click',()=>openEditor(r));return;}
      let pos=new kakao.maps.LatLng(lat,lon),mark=new kakao.maps.Marker({position:pos,map,image:markerImage(r)});markers.push(mark);bounds.extend(pos);num++;
+     if(icons){
+       const flag=document.createElement('div');flag.textContent=icons;
+       flag.style.cssText='background:white;border:1px solid #52657a;border-radius:10px;padding:1px 4px;font-size:13px;white-space:nowrap;pointer-events:none;transform:translate(20px,-12px)';
+       const personalOverlay=new kakao.maps.CustomOverlay({position:pos,content:flag,yAnchor:1.8,zIndex:5});
+       personalOverlay.setMap(map);markers.push(personalOverlay);
+     }
      if(r['장소부가정보']){
        const note=document.createElement('div');note.textContent=String(r['장소부가정보']).slice(0,45);
        note.style.cssText='background:white;color:#222;border:1px solid #aaa;border-radius:4px;padding:2px 5px;font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none';
@@ -159,11 +239,16 @@
        let link='https://map.kakao.com/link/map/'+encodeURIComponent(lat+','+lon);
        const smsInfo=smsMatch(r)?'<div style="color:#b91c1c;font-weight:700">🚨 재난문자 연계 후보</div><div>문자 발송: '+sanitize((Array.isArray(r['재난문자발송일시'])?r['재난문자발송일시']:[]).join(', '))+'</div><div>주소·시간 일치 후보 (확정 아님)</div>':'';
        let html='<div class="popup" style="padding:10px"><strong>신고: '+t+'</strong><div>종료: '+sanitize(r['상황종료일시']||'미확인')+'</div><div>소요: '+sanitize(durationText(r))+'</div><div>진행: '+sanitize(r['진행상태']||'미확인')+'</div><div>소방관서: '+sanitize(r['소방관서']||'미확인')+'</div>'+desc+'<div>구분2: '+detail+'</div><div>주소: '+addr+'</div>'+(r['원본상세주소']?'<div>원본 상세주소: '+sanitize(r['원본상세주소'])+'</div>':'')+'<div>B14: '+(b14Confirmed(r)?'확인':'미확인')+'</div><div>종결: '+sanitize(r['종결여부']||'미확인')+'</div><div>피해액: '+sanitize(amountText(r))+' ('+sanitize(r['피해액구분']||'미확인')+')</div><div>신뢰도: '+sanitize(r['매칭신뢰도']||'미확인')+'</div><div>분석: '+sanitize(r['분석시각']||'미확인')+'</div>'+smsInfo+'<a href="'+link+'" target="_blank" rel="noopener">카카오맵에서 열기</a></div>';
-       activeInfo=new kakao.maps.InfoWindow({content:html,removable:true});activeInfo.open(map,mark);
+       const content=document.createElement('div');content.innerHTML=html;
+       const personalPanel=document.createElement('div');personalPanel.style.cssText='padding:0 10px 10px;max-width:260px;overflow-wrap:anywhere;font-size:12px';
+       if(icons){const summary=document.createElement('div');summary.textContent='내 표시: '+icons;personalPanel.appendChild(summary);}
+       if(personal.memo){const memo=document.createElement('div');memo.style.whiteSpace='pre-wrap';memo.textContent=personal.memo;personalPanel.appendChild(memo);}
+       const edit=document.createElement('button');edit.type='button';edit.className='manual-edit';edit.textContent='내 표시 · 메모 편집';edit.addEventListener('click',()=>openEditor(r));personalPanel.appendChild(edit);content.appendChild(personalPanel);
+       activeInfo=new kakao.maps.InfoWindow({content,removable:true});activeInfo.open(map,mark);
      };
      kakao.maps.event.addListener(mark,'click',show);item.addEventListener('click',()=>{map.panTo(pos);show();el('map').scrollIntoView({behavior:'smooth'});});
    });
-   if(num)map.setBounds(bounds);
+   if(num&&!keepView)map.setBounds(bounds);
    status(el('day').value+' · 지도 표시 '+num+'건'+(entries.length!==num?' (좌표 없는 '+(entries.length-num)+'건 제외)':'')+' / 전국 공개 목록 '+currentData.length+'건'+(b14Status?' · '+b14Status:''));
  }
  async function loadData(){
@@ -205,7 +290,7 @@
    document.head.appendChild(script);
  }
  el('refresh').addEventListener('click',loadData);el('day').addEventListener('change',loadData);el('group').addEventListener('change',()=>{if(currentData.length)render();});
- el('damage').addEventListener('change',render);
+ el('damage').addEventListener('change',()=>render());el('manualFilter').addEventListener('change',()=>render());
  el('saveKey').addEventListener('click',()=>{let key=el('kakaoKey').value.trim();if(!key){status('JavaScript 키를 입력해 주세요.');return;}localStorage.setItem('firemap-kakao-js-key',key);loadSdk(key);});
  el('changeKey').addEventListener('click',()=>{el('keyBox').classList.add('visible');el('kakaoKey').value=localStorage.getItem('firemap-kakao-js-key')||'';});
  loadSdk(localStorage.getItem('firemap-kakao-js-key')||'');
